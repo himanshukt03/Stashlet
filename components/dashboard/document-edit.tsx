@@ -75,8 +75,8 @@ export function DocumentEditDialog({
       customType: document.customType || "",
       description: document.description || "",
       tags: document.tags || [],
-      issueDate: document.issueDate ? new Date(document.issueDate) : undefined,
-      expiryDate: document.expiryDate ? new Date(document.expiryDate) : undefined,
+      issueDate: document.issueDate || null,
+      expiryDate: document.expiryDate || null,
       isTemporary: document.isTemporary,
     },
   });
@@ -283,8 +283,8 @@ export function DocumentEditDialog({
                       <PopoverContent className="w-auto p-0" align="start">
                         <Calendar
                           mode="single"
-                          selected={field.value || undefined}
-                          onSelect={field.onChange}
+                          selected={field.value ? new Date(field.value) : undefined}
+                          onSelect={(date) => field.onChange(date ? date.toISOString() : null)}
                           initialFocus
                         />
                       </PopoverContent>
@@ -321,12 +321,12 @@ export function DocumentEditDialog({
                       <PopoverContent className="w-auto p-0" align="start">
                         <Calendar
                           mode="single"
-                          selected={field.value || undefined}
-                          onSelect={field.onChange}
+                          selected={field.value ? new Date(field.value) : undefined}
+                          onSelect={(date) => field.onChange(date ? date.toISOString() : null)}
                           initialFocus
                           disabled={(date) =>
                             form.watch("issueDate")
-                              ? date < form.watch("issueDate")!
+                              ? date < new Date(form.watch("issueDate")!)
                               : false
                           }
                         />

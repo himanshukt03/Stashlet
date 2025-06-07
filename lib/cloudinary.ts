@@ -11,7 +11,7 @@ cloudinary.config({
 export async function uploadToCloudinary(fileBuffer: Buffer, options = {}) {
   return new Promise((resolve, reject) => {
     const uploadOptions = {
-      resource_type: 'auto',
+      resource_type: 'auto' as any,
       ...options,
     };
 
@@ -25,7 +25,7 @@ export async function uploadToCloudinary(fileBuffer: Buffer, options = {}) {
 // Delete file from Cloudinary
 export async function deleteFromCloudinary(publicId: string) {
   return cloudinary.uploader.destroy(publicId);
-}
+} 
 
 // Generate thumbnail URL with transformations
 export function generateThumbnail(url: string, width = 200, height = 200) {

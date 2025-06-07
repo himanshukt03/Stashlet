@@ -121,11 +121,13 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    const uploadResult = await uploadToCloudinary(buffer, {
+    const uploadOptions = {
+      resource_type: "auto" as any,
       folder: 'stashlet',
-      resource_type: 'auto',
       public_id: `${Date.now()}-${file.name.replace(/\s+/g, '_')}`,
-    }) as UploadApiResponse;
+    };
+
+    const uploadResult = await uploadToCloudinary(buffer, uploadOptions) as UploadApiResponse;
 
     const now = new Date();
 
