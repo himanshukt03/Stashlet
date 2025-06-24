@@ -208,7 +208,7 @@ export function DocumentGrid({ initialDocuments = [] }: DocumentGridProps) {
   }
 
   // Empty state
-  if (!isLoading && documents.length === 0) {
+  if (!isLoading && Array.isArray(documents) && documents.length === 0) {
     return <EmptyState onReset={resetFilters} hasFilters={!!(search || filters.type || filters.isTemporary !== undefined || selectedTags.length > 0)} />;
   }
 
@@ -354,7 +354,7 @@ export function DocumentGrid({ initialDocuments = [] }: DocumentGridProps) {
             : "space-y-3"
         }
       >
-        {documents.map((document) => (
+        {(Array.isArray(documents) ? documents : []).map((document) => (
           <DocumentCard
             key={document._id}
             document={document}
