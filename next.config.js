@@ -7,7 +7,6 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
-  swcMinify: false,
   images: { unoptimized: true },
 };
 
