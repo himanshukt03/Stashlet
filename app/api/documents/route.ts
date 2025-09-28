@@ -1,68 +1,58 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { connectToDatabase } from '@/lib/db';
-import Document from '@/models/Document';
-import { uploadToCloudinary } from '@/lib/cloudinary';
+import { Buffer } from 'node:buffer';
+import { randomUUID } from 'node:crypto';
 import { uploadRequestSchema } from '@/lib/validators';
-import { isValidFileType } from '@/lib/utils';
-import type { UploadApiResponse } from 'cloudinary';
+import { isValidFileType, getFileExtension } from '@/lib/utils';
+import {
+  createDocument,
+  listDocuments,
+  mapToApiDocument,
+  type DocumentFilters,
+  type DocumentRecord,
+} from '@/lib/document-repository';
+import { uploadBufferToS3, buildPublicUrl, S3_BUCKET } from '@/lib/aws/s3';
+import { triggerResizeLambda } from '@/lib/aws/lambda';
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const DEFAULT_PAGE_LIMIT = 12;
+const MAKE_PUBLIC_UPLOAD = process.env.AWS_S3_FORCE_PUBLIC_READ === 'true';
+const THUMBNAIL_PREFIX = process.env.AWS_S3_THUMBNAIL_PREFIX || 'thumbnails';
 
 // GET - Fetch documents with optional filtering
 export async function GET(request: NextRequest) {
   try {
-    await connectToDatabase();
-
     const searchParams = request.nextUrl.searchParams;
-    const search = searchParams.get('search') || '';
-    const type = searchParams.get('type') || '';
-    const tagsRaw = searchParams.get('tags');
-    const tags = tagsRaw ? tagsRaw.split(',') : [];
-    const isTemporary = searchParams.get('isTemporary');
-    const startDate = searchParams.get('startDate') ? new Date(searchParams.get('startDate')!) : null;
-    const endDate = searchParams.get('endDate') ? new Date(searchParams.get('endDate')!) : null;
-    const sortBy = searchParams.get('sortBy') || 'createdAt';
-    const sortOrder = searchParams.get('sortOrder') || 'desc';
-    const page = parseInt(searchParams.get('page') || '1');
-    const limit = parseInt(searchParams.get('limit') || '12');
 
-    let query: any = {};
+    const pageParam = Number(searchParams.get('page'));
+    const limitParam = Number(searchParams.get('limit'));
+    const filters: DocumentFilters = {
+      search: searchParams.get('search') ?? undefined,
+      type: searchParams.get('type') ?? undefined,
+      tags: searchParams.get('tags') ? searchParams.get('tags')!.split(',') : undefined,
+      isTemporary:
+        searchParams.get('isTemporary') !== null
+          ? searchParams.get('isTemporary') === 'true'
+          : undefined,
+      startDate: searchParams.get('startDate')
+        ? new Date(searchParams.get('startDate')!)
+        : undefined,
+      endDate: searchParams.get('endDate') ? new Date(searchParams.get('endDate')!) : undefined,
+      sortBy: (searchParams.get('sortBy') as DocumentFilters['sortBy']) ?? undefined,
+      sortOrder: (searchParams.get('sortOrder') as DocumentFilters['sortOrder']) ?? undefined,
+      page: Number.isFinite(pageParam) && pageParam > 0 ? pageParam : 1,
+      limit:
+        Number.isFinite(limitParam) && limitParam > 0 ? limitParam : DEFAULT_PAGE_LIMIT,
+    };
 
-    if (search) {
-      query.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
-        { tags: { $in: [new RegExp(search, 'i')] } },
-      ];
-    }
-
-    if (type) query.type = type;
-    if (Array.isArray(tags) && tags.length > 0) query.tags = { $in: tags };
-    if (isTemporary !== null) query.temporary = isTemporary === 'true';
-
-    if (startDate || endDate) {
-      query.createdAt = {};
-      if (startDate) query.createdAt.$gte = startDate;
-      if (endDate) query.createdAt.$lte = endDate;
-    }
-
-    const sort: any = {};
-    sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
-
-    const totalCount = await Document.countDocuments(query);
-
-    const documents = await Document.find(query)
-      .sort(sort)
-      .skip((page - 1) * limit)
-      .limit(limit);
+    const result = await listDocuments(filters);
 
     return NextResponse.json({
-      documents,
+      documents: result.items.map(mapToApiDocument),
       pagination: {
-        total: totalCount,
-        page,
-        limit,
-        totalPages: Math.ceil(totalCount / limit),
+        total: result.total,
+        page: result.page,
+        limit: result.limit,
+        totalPages: result.totalPages,
       },
     });
   } catch (error) {
@@ -74,13 +64,8 @@ export async function GET(request: NextRequest) {
 // POST - Upload document
 export async function POST(request: NextRequest) {
   try {
-    await connectToDatabase();
     const formData = await request.formData();
     const file = formData.get('file') as File;
-
-    // Log all received form fields
-    const formEntries = Array.from(formData.entries());
-    console.log('Received form fields:', formEntries);
 
     if (!file) {
       console.error('No file provided');
@@ -105,11 +90,8 @@ export async function POST(request: NextRequest) {
       tags: formData.get('tags') ? JSON.parse(formData.get('tags') as string) : [],
       issueDate: formData.get('issueDate') ? (formData.get('issueDate') as string) : null,
       expiryDate: formData.get('expiryDate') ? (formData.get('expiryDate') as string) : null,
-      temporary: formData.get('isTemporary') === 'true',
+      isTemporary: formData.get('isTemporary') === 'true',
     };
-
-    // Log parsed documentData
-    console.log('Parsed documentData:', documentData);
 
     try {
       uploadRequestSchema.parse(documentData);
@@ -121,31 +103,58 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
-    const uploadOptions = {
-      resource_type: "auto" as any,
-      folder: 'stashlet',
-      public_id: `${Date.now()}-${file.name.replace(/\s+/g, '_')}`,
-    };
+    const documentId = randomUUID();
+    const fileExtension = getFileExtension(file.name) || file.type.split('/').pop() || 'bin';
+    const sanitizedFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const objectKey = `documents/${documentId}/${sanitizedFileName || `${documentId}.${fileExtension}`}`;
 
-    const uploadResult = await uploadToCloudinary(buffer, uploadOptions) as UploadApiResponse;
+    const { url: fileUrl, isPublic: isPublicObject } = await uploadBufferToS3({
+      key: objectKey,
+      body: buffer,
+      contentType: file.type,
+      makePublic: MAKE_PUBLIC_UPLOAD,
+      cacheControl: 'public, max-age=31536000, immutable',
+    });
 
-    const now = new Date();
+    const now = new Date().toISOString();
+    const isImage = file.type.startsWith('image/');
+    const thumbnailKey = isImage ? `${THUMBNAIL_PREFIX}/${documentId}.jpg` : null;
+    const thumbnailUrl =
+      thumbnailKey && isPublicObject ? buildPublicUrl(thumbnailKey) : fileUrl;
 
-    const document = await Document.create({
-      ...documentData,
-      fileUrl: uploadResult.secure_url,
-      thumbnailUrl: uploadResult.secure_url,
-      publicId: uploadResult.public_id,
+    const record: DocumentRecord = {
+      id: documentId,
+      title: documentData.title,
+      type: documentData.type,
+      customType: documentData.customType || null,
+      description: documentData.description || null,
+      tags: Array.isArray(documentData.tags) ? documentData.tags : [],
+      issueDate: documentData.issueDate ? new Date(documentData.issueDate).toISOString() : null,
+      expiryDate: documentData.expiryDate ? new Date(documentData.expiryDate).toISOString() : null,
+      fileUrl,
+      thumbnailUrl,
+      s3Key: objectKey,
+      thumbnailKey,
       fileSize: file.size,
       mimeType: file.type,
       fileName: file.name,
+      isTemporary: documentData.isTemporary ?? false,
       createdAt: now,
       updatedAt: now,
-      issueDate: documentData.issueDate ? new Date(documentData.issueDate) : null,
-      expiryDate: documentData.expiryDate ? new Date(documentData.expiryDate) : null,
-    });
+    };
 
-    return NextResponse.json(document, { status: 201 });
+    await createDocument(record);
+
+    if (isImage && thumbnailKey) {
+      await triggerResizeLambda({
+        bucket: S3_BUCKET,
+        key: objectKey,
+        targetKey: thumbnailKey,
+        contentType: file.type,
+      });
+    }
+
+    return NextResponse.json(mapToApiDocument(record), { status: 201 });
   } catch (error) {
     console.error('Error creating document:', error);
     return NextResponse.json({ error: 'Failed to create document' }, { status: 500 });

@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { connectToDatabase } from '@/lib/db';
-import Document from '@/models/Document';
-import { deleteFromCloudinary } from '@/lib/cloudinary';
 import { updateDocumentSchema } from '@/lib/validators';
+import {
+  getDocumentById,
+  updateDocument,
+  deleteDocument,
+  mapToApiDocument,
+  type DocumentRecord,
+} from '@/lib/document-repository';
+import { deleteObjectFromS3 } from '@/lib/aws/s3';
 
 // GET a single document by ID
 export async function GET(
@@ -10,18 +15,14 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    await connectToDatabase();
-    
     const { id } = params;
-    
-    // Find document
-    const document = await Document.findById(id);
-    
+
+    const document = await getDocumentById(id);
     if (!document) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 });
     }
-    
-    return NextResponse.json(document);
+
+    return NextResponse.json(mapToApiDocument(document));
   } catch (error) {
     console.error('Error fetching document:', error);
     return NextResponse.json({ error: 'Failed to fetch document' }, { status: 500 });
@@ -34,30 +35,40 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   try {
-    await connectToDatabase();
-    
     const { id } = params;
     const data = await request.json();
-    
+
     // Validate update data
     try {
       updateDocumentSchema.parse(data);
     } catch (error) {
       return NextResponse.json({ error: 'Invalid document data' }, { status: 400 });
     }
-    
-    // Find and update document
-    const document = await Document.findByIdAndUpdate(
-      id,
-      { $set: data },
-      { new: true, runValidators: true }
-    );
-    
+
+    const updates: Partial<DocumentRecord> = {
+      title: data.title,
+      type: data.type,
+      customType: data.customType ?? null,
+      description: data.description ?? null,
+      tags: Array.isArray(data.tags) ? data.tags : undefined,
+      isTemporary: data.isTemporary,
+    };
+
+    if ('issueDate' in data) {
+      updates.issueDate = data.issueDate ? new Date(data.issueDate).toISOString() : null;
+    }
+
+    if ('expiryDate' in data) {
+      updates.expiryDate = data.expiryDate ? new Date(data.expiryDate).toISOString() : null;
+    }
+
+    const document = await updateDocument(id, updates);
+
     if (!document) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 });
     }
-    
-    return NextResponse.json(document);
+
+    return NextResponse.json(mapToApiDocument(document));
   } catch (error) {
     console.error('Error updating document:', error);
     return NextResponse.json({ error: 'Failed to update document' }, { status: 500 });
@@ -70,25 +81,23 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   try {
-    await connectToDatabase();
-    
     const { id } = params;
-    
-    // Find document
-    const document = await Document.findById(id);
-    
+
+    const document = await getDocumentById(id);
     if (!document) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 });
     }
-    
-    // Delete from Cloudinary
-    if (document.publicId) {
-      await deleteFromCloudinary(document.publicId);
+
+    if (document.s3Key) {
+      await deleteObjectFromS3(document.s3Key);
     }
-    
-    // Delete from database
-    await Document.findByIdAndDelete(id);
-    
+
+    if (document.thumbnailKey) {
+      await deleteObjectFromS3(document.thumbnailKey);
+    }
+
+    await deleteDocument(id);
+
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Error deleting document:', error);
