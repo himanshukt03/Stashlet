@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { DocumentCard, DocumentCardSkeleton } from "./document-card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,6 +45,60 @@ export function DocumentGrid({ initialDocuments = [] }: DocumentGridProps) {
   const [editingDocument, setEditingDocument] = useState<any | null>(null);
   const [showFilters, setShowFilters] = useState(false);
 
+  type FetchOptions = Partial<{
+    search: string;
+    type: string;
+    isTemporary: boolean | undefined;
+    tags: string[];
+  }>;
+
+  const fetchDocuments = useCallback(
+    async (options: FetchOptions = {}) => {
+      try {
+        setIsLoading(true);
+        let url = "/api/documents?";
+
+        const effectiveSearch = options.search ?? search;
+        const effectiveType = options.type ?? filters.type;
+        const effectiveIsTemporary =
+          options.isTemporary !== undefined ? options.isTemporary : filters.isTemporary;
+        const effectiveTags = options.tags ?? selectedTags;
+
+        if (effectiveSearch) {
+          url += `search=${encodeURIComponent(effectiveSearch)}&`;
+        }
+
+        if (effectiveType) {
+          url += `type=${encodeURIComponent(effectiveType)}&`;
+        }
+
+        if (effectiveIsTemporary !== undefined) {
+          url += `isTemporary=${effectiveIsTemporary}&`;
+        }
+
+        if (effectiveTags.length > 0) {
+          url += `tags=${encodeURIComponent(effectiveTags.join(","))}&`;
+        }
+
+        const response = await fetch(url);
+        const data = await response.json();
+
+        setDocuments(data.documents);
+      } catch (error) {
+        console.error("Error fetching documents:", error);
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [filters.isTemporary, filters.type, search, selectedTags]
+  );
+
+  useEffect(() => {
+    if (!initialDocuments.length) {
+      fetchDocuments();
+    }
+  }, [fetchDocuments, initialDocuments.length]);
+
   // Extract all unique tags from documents
   useEffect(() => {
     if (documents.length) {
@@ -55,73 +109,43 @@ export function DocumentGrid({ initialDocuments = [] }: DocumentGridProps) {
     }
   }, [documents]);
 
-  // Fetch documents on component mount
-  useEffect(() => {
-    if (!initialDocuments.length) {
-      fetchDocuments();
-    }
-  }, [initialDocuments]);
-
-  // Fetch documents with filters
-  const fetchDocuments = async () => {
-    try {
-      setIsLoading(true);
-      let url = "/api/documents?";
-      
-      if (search) {
-        url += `search=${encodeURIComponent(search)}&`;
-      }
-      
-      if (filters.type) {
-        url += `type=${encodeURIComponent(filters.type)}&`;
-      }
-      
-      if (filters.isTemporary !== undefined) {
-        url += `isTemporary=${filters.isTemporary}&`;
-      }
-      
-      if (selectedTags.length > 0) {
-        url += `tags=${encodeURIComponent(selectedTags.join(","))}&`;
-      }
-      
-      const response = await fetch(url);
-      const data = await response.json();
-      
-      setDocuments(data.documents);
-    } catch (error) {
-      console.error("Error fetching documents:", error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
   // Debounced search
-  const debouncedSearch = debounce(() => {
-    fetchDocuments();
-  }, 500);
+  const debouncedSearch = useMemo(
+    () =>
+      debounce((value: string) => {
+        fetchDocuments({ search: value });
+      }, 500),
+    [fetchDocuments]
+  );
 
   // Handle search input change
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setSearch(e.target.value);
-    debouncedSearch();
+    const value = e.target.value;
+    setSearch(value);
+    debouncedSearch(value);
   };
 
   // Handle filter changes
   const handleFilterChange = (filter: string, value: any) => {
     setFilters((prev) => ({ ...prev, [filter]: value }));
-    fetchDocuments();
+
+    if (filter === "type") {
+      fetchDocuments({ type: value });
+    }
+
+    if (filter === "isTemporary") {
+      fetchDocuments({ isTemporary: value });
+    }
   };
 
   // Handle tag selection
   const handleTagToggle = (tag: string) => {
-    setSelectedTags((prev) => {
-      if (prev.includes(tag)) {
-        return prev.filter((t) => t !== tag);
-      } else {
-        return [...prev, tag];
-      }
-    });
-    fetchDocuments();
+    const updatedTags = selectedTags.includes(tag)
+      ? selectedTags.filter((t) => t !== tag)
+      : [...selectedTags, tag];
+
+    setSelectedTags(updatedTags);
+    fetchDocuments({ tags: updatedTags });
   };
 
   // Handle document delete
@@ -152,7 +176,7 @@ export function DocumentGrid({ initialDocuments = [] }: DocumentGridProps) {
       isTemporary: undefined,
     });
     setSelectedTags([]);
-    fetchDocuments();
+    fetchDocuments({ search: "", type: "", isTemporary: undefined, tags: [] });
   };
 
   // Loading state

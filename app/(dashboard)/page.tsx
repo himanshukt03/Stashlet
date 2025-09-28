@@ -4,19 +4,13 @@ import { DocumentGrid } from "@/components/dashboard/document-grid";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
-import { connectToDatabase } from "@/lib/db";
-import Document from "@/models/Document";
+import { listDocuments, mapToApiDocument } from "@/lib/document-repository";
 
 // Fetch initial documents for SSR
 async function getDocuments() {
   try {
-    await connectToDatabase();
-    const documents = await Document.find()
-      .sort({ createdAt: -1 })
-      .limit(12)
-      .lean();
-    
-    return JSON.parse(JSON.stringify(documents));
+    const result = await listDocuments({ sortBy: "createdAt", sortOrder: "desc", limit: 12 });
+    return result.items.map(mapToApiDocument);
   } catch (error) {
     console.error("Error fetching documents:", error);
     return [];

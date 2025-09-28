@@ -1,8 +1,7 @@
 import React from "react";
-import { connectToDatabase } from "@/lib/db";
-import Document from "@/models/Document";
 import { Separator } from "@/components/ui/separator";
 import { documentTypes } from "@/lib/validators";
+import { fetchAllDocuments } from "@/lib/document-repository";
 import { 
   FileIcon, 
   ImageIcon, 
@@ -18,16 +17,12 @@ import MotionCardWrapper from "@/components/motion-card-wrapper";
 // Fetch document counts by type for SSR
 async function getDocumentCountsByType() {
   try {
-    await connectToDatabase();
-    
-    const typeCounts = await Promise.all(
-      documentTypes.map(async (type) => {
-        const count = await Document.countDocuments({ type });
-        return { type, count };
-      })
-    );
-    
-    return typeCounts;
+    const documents = await fetchAllDocuments();
+
+    return documentTypes.map((type) => ({
+      type,
+      count: documents.filter((document) => document.type === type).length,
+    }));
   } catch (error) {
     console.error("Error fetching document counts:", error);
     return [];

@@ -1,19 +1,16 @@
 import React from "react";
 import Link from "next/link";
-import { connectToDatabase } from "@/lib/db";
-import Document from "@/models/Document";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
 import { TagIcon } from "lucide-react";
 import { motion } from "framer-motion";
+import { fetchAllDocuments } from "@/lib/document-repository";
 
 // Fetch all unique tags and their counts
 async function getTagsWithCounts() {
   try {
-    await connectToDatabase();
-    
-    const documents = await Document.find({ tags: { $exists: true, $ne: [] } }).lean();
-    
+    const documents = await fetchAllDocuments();
+
     // Extract all tags and count occurrences
     const tagCounts: Record<string, number> = {};
     
@@ -90,7 +87,7 @@ export default async function TagsPage() {
           <h2 className="text-2xl font-bold mb-2">No tags found</h2>
           
           <p className="text-muted-foreground max-w-md mb-6">
-            You haven't added any tags to your documents yet. Add tags when uploading or editing documents to organize them better.
+            You haven&apos;t added any tags to your documents yet. Add tags when uploading or editing documents to organize them better.
           </p>
         </div>
       ) : (
