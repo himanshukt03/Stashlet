@@ -95,12 +95,3 @@ AWS_AUTO_CREATE_TABLE=true
 AWS_RESIZE_LAMBDA_FUNCTION_NAME=
 ```
 
-## Development Workflow
-
-- **Linting:** `npm run lint`
-- **Formatting:** Tailwind & Prettier configs are included; integrate with your editor for on-save formatting.
-- **Testing uploads:** Run the dev server, open the dashboard, and upload any PDF or image ≤10MB.
-- **Inspecting data:**
-  - S3 → verify objects under `documents/<uuid>/...` and optional `thumbnails/` prefix.
-  - DynamoDB → scan the table for new records; each entry maps to the UI grid.
-
